@@ -85,20 +85,45 @@ client.on("message", async msg => {
     const contexto = { chatId, nome, telefone };
 
     // ================================================
-    // COMPROVANTE PIX
+    // COMPROVANTE PIX — com validação por Gemini Vision
     // ================================================
     if (msg.hasMedia) {
-      logger.info(chatId, "Mídia recebida — encaminhando como comprovante PIX.");
 
-      await msg.forward(config.NUMERO_DONO);
+      // Stickers e áudios não são comprovantes — ignora silenciosamente
+      if (msg.type === "sticker" || msg.type === "audio" || msg.type === "ptt") return;
 
-      // Limpa o histórico da conversa — reserva encaminhada, ciclo completo
-      ai.limparHistorico(chatId);
+      logger.info(chatId, `Mídia recebida (tipo: ${msg.type}) — analisando com Gemini Vision.`);
 
-      return client.sendMessage(
-        chatId,
-        "Perfeito 🙂 Recebi o comprovante! Vou validar e já confirmo sua reserva."
-      );
+      // Baixa a imagem e analisa
+      const media = await msg.downloadMedia();
+      if (!media || !media.data) {
+        logger.warn(chatId, "Não foi possível baixar a mídia.");
+        return;
+      }
+
+      const ehComprovante = await ai.analisarComprovante(media.data, media.mimetype, chatId);
+
+      if (ehComprovante) {
+        logger.info(chatId, "Comprovante PIX validado — encaminhando para o dono.");
+
+        // Encaminha para o dono e confirma para o cliente
+        await msg.forward(config.NUMERO_DONO);
+        ai.limparHistorico(chatId); // ciclo de reserva completo
+
+        return client.sendMessage(
+          chatId,
+          "Comprovante recebido e validado ✅ Vou confirmar sua reserva em breve. Obrigado!"
+        );
+
+      } else {
+        logger.info(chatId, "Imagem não é comprovante PIX — orientando cliente.");
+
+        return client.sendMessage(
+          chatId,
+          "Essa imagem não parece ser um comprovante de PIX 🙂\n" +
+          "Por favor, envie o comprovante da transferência para confirmar sua reserva."
+        );
+      }
     }
 
     // Ignorar mensagens vazias

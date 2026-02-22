@@ -4,6 +4,7 @@
 // ================================================
 const sheets = require("./sheets");
 const logger = require("./logger");
+const config = require("./config");
 
 
 // ================================================
@@ -111,11 +112,21 @@ async function criarReserva(args, chatId) {
   await sheets.salvarReserva(checkin, checkout, nome, telefone, valor);
 
   logger.info(chatId, "Reserva criada com sucesso.");
+
+  const sinal = Math.ceil(valor * 0.3);
+
   return {
     sucesso: true,
     mensagem: `Reserva de ${nome} registrada para ${checkin} a ${checkout}`,
     valorTotal: valor,
-    sinalPix: Math.ceil(valor * 0.3)
+    sinalPix: sinal,
+    instrucoesPagamento: {
+      valorSinal: sinal,
+      chavePix: config.CHAVE_PIX,
+      nomeBeneficiario: config.NOME_BENEFICIARIO,
+      banco: config.BANCO_PIX,
+      instrucao: `Faça o PIX de R$ ${sinal} para a chave ${config.CHAVE_PIX} (CPF) — ${config.NOME_BENEFICIARIO} — ${config.BANCO_PIX}. Depois envie o comprovante aqui.`
+    }
   };
 }
 

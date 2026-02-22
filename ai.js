@@ -124,4 +124,37 @@ async function processarMensagem(texto, contexto = {}) {
 }
 
 
-module.exports = { processarMensagem, limparHistorico };
+// ================================================
+// VALIDAÇÃO DE COMPROVANTE PIX (Gemini Vision)
+// ================================================
+async function analisarComprovante(imagemBase64, mimeType, chatId = "pix") {
+  try {
+    logger.info(chatId, "Analisando imagem com Gemini Vision...");
+
+    const model = genAI.getGenerativeModel({ model: config.GEMINI_MODEL });
+
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          mimeType: mimeType || "image/jpeg",
+          data: imagemBase64
+        }
+      },
+      "Esta imagem é um comprovante de transferência PIX ou depósito bancário? " +
+      "Responda apenas SIM ou NÃO. Não explique."
+    ]);
+
+    const resposta = result.response.text().trim().toUpperCase();
+    logger.info(chatId, `Resultado da análise de imagem: ${resposta}`);
+
+    return resposta.startsWith("SIM");
+
+  } catch (err) {
+    logger.error(chatId, "Erro ao analisar comprovante:", err.message);
+    // Em caso de erro na análise, assumir que NÃO é comprovante (mais seguro)
+    return false;
+  }
+}
+
+
+module.exports = { processarMensagem, limparHistorico, analisarComprovante };

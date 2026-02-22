@@ -13,6 +13,11 @@ module.exports = {
   // Configure no .env: SPREADSHEET_ID=seu_id_aqui
   SPREADSHEET_ID: process.env.SPREADSHEET_ID || "",
 
+  // Dados do PIX para pagamento do sinal
+  CHAVE_PIX: process.env.CHAVE_PIX || "",
+  NOME_BENEFICIARIO: process.env.NOME_BENEFICIARIO || "",
+  BANCO_PIX: process.env.BANCO_PIX || "",
+
   // Range das reservas na planilha
   RESERVAS_RANGE: "reservas!A2:H500",
   RESERVAS_APPEND_RANGE: "reservas!A:H",
