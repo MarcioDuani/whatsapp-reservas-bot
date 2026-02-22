@@ -12,6 +12,33 @@ const logger = require("./logger");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+
+// ================================================
+// RETRY AUTOMÁTICO para rate limit do Gemini
+// ================================================
+async function geminiComRetry(fn, chatId = "?", tentativas = 3) {
+  for (let i = 1; i <= tentativas; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isRateLimit = err?.message?.includes("quota") ||
+        err?.message?.includes("429") ||
+        err?.status === 429;
+
+      if (isRateLimit && i < tentativas) {
+        // Extrai o retryDelay da mensagem de erro do Google (ex: "retryDelay":"7s")
+        const match = err.message?.match(/retryDelay[":\s]+["']?(\d+)s/);
+        const espera = match ? parseInt(match[1]) * 1000 : 12000; // default 12s
+
+        logger.warn(chatId, `Rate limit — aguardando ${espera / 1000}s antes de tentar novamente (tentativa ${i}/${tentativas})`);
+        await new Promise(r => setTimeout(r, espera));
+      } else {
+        throw err; // outros erros ou última tentativa: propaga normalmente
+      }
+    }
+  }
+}
+
 // ================================================
 // HISTÓRICO POR CHAT (multi-turn em memória)
 // Estrutura: { chatId: [{role, parts:[{text}]}] }
@@ -69,7 +96,7 @@ async function processarMensagem(texto, contexto = {}) {
 
     // 4. Envia a mensagem atual
     logger.info(chatId, `→ Enviando para Gemini: "${texto.substring(0, 80)}"`);
-    let result = await chat.sendMessage(texto);
+    let result = await geminiComRetry(() => chat.sendMessage(texto), chatId);
     let response = result.response;
 
     // ================================================
@@ -99,7 +126,7 @@ async function processarMensagem(texto, contexto = {}) {
       }
 
       // Retorna os resultados para o Gemini continuar o raciocínio
-      result = await chat.sendMessage(functionResults);
+      result = await geminiComRetry(() => chat.sendMessage(functionResults), chatId);
       response = result.response;
     }
 
@@ -133,16 +160,14 @@ async function analisarComprovante(imagemBase64, mimeType, chatId = "pix") {
 
     const model = genAI.getGenerativeModel({ model: config.GEMINI_MODEL });
 
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          mimeType: mimeType || "image/jpeg",
-          data: imagemBase64
-        }
-      },
-      "Esta imagem é um comprovante de transferência PIX ou depósito bancário? " +
-      "Responda apenas SIM ou NÃO. Não explique."
-    ]);
+    const result = await geminiComRetry(
+      () => model.generateContent([
+        { inlineData: { mimeType: mimeType || "image/jpeg", data: imagemBase64 } },
+        "Esta imagem é um comprovante de transferência PIX ou depósito bancário? " +
+        "Responda apenas SIM ou NÃO. Não explique."
+      ]),
+      chatId
+    );
 
     const resposta = result.response.text().trim().toUpperCase();
     logger.info(chatId, `Resultado da análise de imagem: ${resposta}`);
