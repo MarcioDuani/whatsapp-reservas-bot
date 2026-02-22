@@ -23,7 +23,7 @@ module.exports = {
   RESERVAS_APPEND_RANGE: "reservas!A:H",
 
   // Modelo de IA do Gemini
-  GEMINI_MODEL: "gemini-2.5-flash",
+  GEMINI_MODEL: "gemini-2.0-flash",
 
   // Preços por diária
   PRECOS: {
