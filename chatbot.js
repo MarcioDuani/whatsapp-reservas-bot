@@ -22,7 +22,11 @@ client.on("qr", qr => {
   logger.info(null, "QR Code gerado — escaneie com o WhatsApp.");
 });
 
+// Timestamp de quando o bot subiu — mensagens anteriores serão ignoradas
+let startupTime = Math.floor(Date.now() / 1000);
+
 client.on("ready", () => {
+  startupTime = Math.floor(Date.now() / 1000);
   logger.info(null, "BOT ONLINE 🚀");
 });
 
@@ -61,6 +65,12 @@ client.on("message", async msg => {
 
     // Ignorar mensagens do próprio bot
     if (msg.fromMe) return;
+
+    // Ignorar mensagens antigas (chegaram antes do bot subir)
+    if (msg.timestamp && msg.timestamp < startupTime) {
+      logger.info(msg.from, `Mensagem antiga ignorada (${new Date(msg.timestamp * 1000).toLocaleTimeString()}).`);
+      return;
+    }
 
     // Ignorar tipos de sistema (notificações, eventos)
     const tiposIgnorados = ["e2e_notification", "notification_template", "call_log"];
