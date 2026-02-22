@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-reservas-bot",
+  "version": "1.0.0",
+  "description": "Chatbot de reservas para WhatsApp com IA (Gemini) e integração Google Sheets",
+  "main": "chatbot.js",
+  "scripts": {
+    "start": "node chatbot.js",
+    "listar-modelos": "node scripts/listarModelos.js",
+    "teste-ia": "node scripts/testeIA.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "dotenv": "^17.2.4",
+    "googleapis": "^171.4.0",
+    "node-fetch": "^2.7.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.4"
+  }
+}

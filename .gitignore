@@ -1,0 +1,7 @@
+# .gitignore — Arquivos que NÃO devem ser commitados/compartilhados
+.env
+google-credentials.json
+node_modules/
+logs/
+.wwebjs_auth/
+.wwebjs_cache/
