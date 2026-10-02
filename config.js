@@ -22,10 +22,11 @@ module.exports = {
   RESERVAS_RANGE: "reservas!A2:H500",
   RESERVAS_APPEND_RANGE: "reservas!A:H",
 
-  // Modelo de IA do Gemini
-  GEMINI_MODEL: "gemini-2.0-flash",
+  // Modelo de IA do Gemini (gemini-3.5-flash: alta cota gratuita e suporte robusto a Function Calling)
+  GEMINI_MODEL: process.env.GEMINI_MODEL || "gemini-3.5-flash",
 
-  // Preços por diária
+  // Preços e Regras de Diária
+  MINIMO_DIARIAS: 2,
   PRECOS: {
     SEMANA: 300,    // Segunda a Quinta
     FIM_DE_SEMANA: 450  // Sexta, Sábado, Domingo
@@ -42,7 +43,8 @@ module.exports = {
   // Rate limiting (em ms) — intervalo mínimo entre respostas para o mesmo chat
   RATE_LIMIT_MS: 1500,
 
-  // Máximo de turnos de histórico mantidos por conversa
-  MAX_HISTORICO_TURNOS: 20,
+  // Máximo de turnos de histórico mantidos por conversa (3 turnos = 6 mensagens)
+  // Otimizado para economizar tokens sem perder o contexto recente
+  MAX_HISTORICO_TURNOS: 3,
 
 };

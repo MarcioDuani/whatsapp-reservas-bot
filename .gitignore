@@ -5,3 +5,5 @@ node_modules/
 logs/
 .wwebjs_auth/
 .wwebjs_cache/
+sessions_store.json
+*.tmp

@@ -5,8 +5,10 @@
   "main": "chatbot.js",
   "scripts": {
     "start": "node chatbot.js",
+    "chat-test": "node scripts/chatTest.js",
     "listar-modelos": "node scripts/listarModelos.js",
-    "teste-ia": "node scripts/testeIA.js"
+    "teste-ia": "node scripts/testeIA.js",
+    "limpar-sessao": "node scripts/limparSessao.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -14,6 +16,6 @@
     "googleapis": "^171.4.0",
     "node-fetch": "^2.7.0",
     "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "^1.34.4"
+    "whatsapp-web.js": "^1.34.7"
   }
 }

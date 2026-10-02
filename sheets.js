@@ -86,6 +86,18 @@ function analisarPeriodo(checkinBR, checkoutBR, registros) {
     return { status: "erro", mensagem: "A data de checkout deve ser após o checkin." };
   }
 
+  const diffMs = saida.getTime() - entrada.getTime();
+  const noites = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  const minDiarias = config.MINIMO_DIARIAS || 2;
+
+  if (noites < minDiarias) {
+    return {
+      status: "minimo_diarias",
+      noites: noites,
+      mensagem: `A casa exige o mínimo de ${minDiarias} diárias para reserva. O cliente pediu apenas ${noites} diária(s).`
+    };
+  }
+
   for (const r of registros) {
     const rIn = parseData(r[0]);
     const rOut = parseData(r[1]);

@@ -13,12 +13,12 @@ const config = require("./config");
 const functionDeclarations = [
   {
     name: "consultarDisponibilidade",
-    description: "Consulta se a casa está disponível para o período desejado. Use SEMPRE que o cliente informar as datas de check-in e check-out.",
+    description: "Consulta se a casa está disponível e já retorna os valores calculados da estadia e o sinal do PIX. Use SEMPRE que o cliente informar as datas.",
     parameters: {
       type: "OBJECT",
       properties: {
-        checkin: { type: "STRING", description: "Data de entrada no formato DD/MM/YYYY. Exemplo: 20/03/2025" },
-        checkout: { type: "STRING", description: "Data de saída no formato DD/MM/YYYY. Exemplo: 25/03/2025" }
+        checkin: { type: "STRING", description: "Data de entrada no formato DD/MM/YYYY. Exemplo: 20/03/2026" },
+        checkout: { type: "STRING", description: "Data de saída no formato DD/MM/YYYY. Exemplo: 25/03/2026" }
       },
       required: ["checkin", "checkout"]
     }
@@ -73,7 +73,19 @@ async function consultarDisponibilidade(args, chatId) {
   const registros = await sheets.getReservas();
   const resultado = sheets.analisarPeriodo(checkin, checkout, registros);
 
-  logger.info(chatId, "Disponibilidade:", resultado);
+  // Se estiver disponível, já calcula e entrega o valor e sinal de uma vez só!
+  // Isso evita uma segunda rodada inteira de Function Calling no Gemini, economizando 50% de chamadas.
+  if (resultado && resultado.status === "livre") {
+    const valor = sheets.calcularValor(checkin, checkout);
+    const sinal = Math.ceil(valor * 0.3);
+    resultado.valorTotal = valor;
+    resultado.sinalPix = sinal;
+    resultado.chavePix = config.CHAVE_PIX;
+    resultado.beneficiario = config.NOME_BENEFICIARIO;
+    resultado.banco = config.BANCO_PIX;
+  }
+
+  logger.info(chatId, "Disponibilidade e Orçamento:", resultado);
   return resultado;
 }
 
@@ -96,7 +108,14 @@ async function calcularValor(args, chatId) {
   const sinal = Math.ceil(valor * 0.3);
   logger.info(chatId, "Valor calculado:", { valor, sinal });
 
-  return { valor, sinal, moeda: "BRL" };
+  return {
+    valor,
+    sinal,
+    moeda: "BRL",
+    chavePix: config.CHAVE_PIX,
+    beneficiario: config.NOME_BENEFICIARIO,
+    banco: config.BANCO_PIX
+  };
 }
 
 
