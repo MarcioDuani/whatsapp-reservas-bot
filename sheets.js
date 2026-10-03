@@ -132,8 +132,8 @@ function analisarPeriodo(checkinBR, checkoutBR, registros) {
       continue;
     }
 
-    // Reserva confirmada — trava
-    if (status === "confirmado" || status === "pendente") {
+    // Reserva confirmada — trava (apenas pago/confirmado, 'pendente' deixa a data livre)
+    if (status === "confirmado" || status === "pago") {
       return { status: "ocupado", motivo: "reserva existente" };
     }
   }
@@ -142,47 +142,25 @@ function analisarPeriodo(checkinBR, checkoutBR, registros) {
 }
 
 
-// ================================================
-// CALCULAR VALOR
-// ================================================
-function calcularValor(checkinBR, checkoutBR) {
-  const entrada = parseData(checkinBR);
-  const saida = parseData(checkoutBR);
-
-  if (!entrada || !saida || saida <= entrada) return 0;
-
-  let total = 0;
-  let data = new Date(entrada);
-
-  while (data < saida) {
-    const dia = data.getDay(); // 0=Dom, 5=Sex, 6=Sab
-    total += (dia === 0 || dia === 5 || dia === 6)
-      ? config.PRECOS.FIM_DE_SEMANA
-      : config.PRECOS.SEMANA;
-    data.setDate(data.getDate() + 1);
-  }
-
-  return total;
-}
-
-
+// O cálculo de valor agora é gerido centralmente pelo pricing.js
 // ================================================
 // SALVAR RESERVA
 // ================================================
-async function salvarReserva(checkinBR, checkoutBR, nome, telefone, valor, chatId = null) {
+async function salvarReserva(dados) {
   return comRetry(async () => {
     const client = await auth.getClient();
     const sheetsAPI = google.sheets({ version: "v4", auth: client });
-    const hoje = new Date().toISOString().split("T")[0];
-
+    
     // Converter DD/MM/YYYY → YYYY-MM-DD para o Sheets
     function brParaISO(br) {
+      if (!br) return "";
+      if (br.includes("-")) return br;
       const [d, m, y] = br.split("/");
       return `${y}-${m}-${d}`;
     }
 
-    const checkinISO = /\d{4}-\d{2}-\d{2}/.test(checkinBR) ? checkinBR : brParaISO(checkinBR);
-    const checkoutISO = /\d{4}-\d{2}-\d{2}/.test(checkoutBR) ? checkoutBR : brParaISO(checkoutBR);
+    const checkinISO = brParaISO(dados.check_in);
+    const checkoutISO = brParaISO(dados.check_out);
 
     await sheetsAPI.spreadsheets.values.append({
       spreadsheetId: config.SPREADSHEET_ID,
@@ -192,22 +170,21 @@ async function salvarReserva(checkinBR, checkoutBR, nome, telefone, valor, chatI
         values: [[
           checkinISO,
           checkoutISO,
-          nome,
-          telefone,
-          "pendente",     // status
-          "",             // regra
-          valor,
-          hoje
+          dados.nome,
+          dados.telefone,
+          dados.status,     // status
+          "",               // regra
+          dados.valor,
+          dados.data_criacao || new Date().toISOString().split("T")[0]
         ]]
       }
     });
-  }, 3, chatId);
+  }, 3);
 }
 
 
 module.exports = {
   getReservas,
   analisarPeriodo,
-  calcularValor,
   salvarReserva,
 };
