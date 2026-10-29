@@ -86,6 +86,18 @@ function analisarPeriodo(checkinBR, checkoutBR, registros) {
     return { status: "erro", mensagem: "A data de checkout deve ser após o checkin." };
   }
 
+  const diffMs = saida.getTime() - entrada.getTime();
+  const noites = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  const minDiarias = config.MINIMO_DIARIAS || 2;
+
+  if (noites < minDiarias) {
+    return {
+      status: "alerta_minimo",
+      noites: noites,
+      mensagem: `O período está livre, mas a casa exige o pagamento mínimo de ${minDiarias} diárias.`
+    };
+  }
+
   for (const r of registros) {
     const rIn = parseData(r[0]);
     const rOut = parseData(r[1]);
@@ -141,6 +153,7 @@ function calcularValor(checkinBR, checkoutBR) {
 
   let total = 0;
   let data = new Date(entrada);
+  let noites = 0;
 
   while (data < saida) {
     const dia = data.getDay(); // 0=Dom, 5=Sex, 6=Sab
@@ -148,6 +161,18 @@ function calcularValor(checkinBR, checkoutBR) {
       ? config.PRECOS.FIM_DE_SEMANA
       : config.PRECOS.SEMANA;
     data.setDate(data.getDate() + 1);
+    noites++;
+  }
+
+  // Se alugou menos noites que o mínimo, cobra os próximos dias até dar o mínimo
+  const minDiarias = config.MINIMO_DIARIAS || 2;
+  while (noites < minDiarias) {
+    const dia = data.getDay();
+    total += (dia === 0 || dia === 5 || dia === 6)
+      ? config.PRECOS.FIM_DE_SEMANA
+      : config.PRECOS.SEMANA;
+    data.setDate(data.getDate() + 1);
+    noites++;
   }
 
   return total;
@@ -193,9 +218,65 @@ async function salvarReserva(checkinBR, checkoutBR, nome, telefone, valor, chatI
 }
 
 
+// ================================================
+// CONFIRMAR PAGAMENTO
+// ================================================
+async function confirmarPagamento(telefone_cliente, chatId = null) {
+  return comRetry(async () => {
+    const client = await auth.getClient();
+    const sheetsAPI = google.sheets({ version: "v4", auth: client });
+    
+    // Baixa a planilha para achar a linha
+    const res = await sheetsAPI.spreadsheets.values.get({
+      spreadsheetId: config.SPREADSHEET_ID,
+      range: config.RESERVAS_RANGE // "reservas!A2:H500"
+    });
+    
+    const rows = res.data.values || [];
+    let rowIndexToUpdate = -1;
+    
+    // Busca de baixo para cima para pegar a reserva mais recente
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      const rowTelefone = row[3] || "";
+      const rowStatus = (row[4] || "").toLowerCase();
+      
+      // Remove caracteres não numéricos para comparar
+      const tel1 = rowTelefone.replace(/\D/g, "");
+      const tel2 = telefone_cliente.replace(/\D/g, "");
+      
+      if (tel1.includes(tel2) || tel2.includes(tel1)) {
+        if (rowStatus === "pendente") {
+          rowIndexToUpdate = i + 2; // +2 porque o array começa no 0 e a planilha começa no A2
+          break;
+        }
+      }
+    }
+    
+    if (rowIndexToUpdate === -1) {
+      logger.warn(chatId, `Nenhuma reserva pendente encontrada para o telefone ${telefone_cliente}`);
+      return false;
+    }
+    
+    // Atualiza a coluna E (Status) para 'confirmado'
+    await sheetsAPI.spreadsheets.values.update({
+      spreadsheetId: config.SPREADSHEET_ID,
+      range: `reservas!E${rowIndexToUpdate}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [["confirmado"]]
+      }
+    });
+    
+    logger.info(chatId, `Reserva da linha ${rowIndexToUpdate} atualizada para confirmado.`);
+    return true;
+  }, 3, chatId);
+}
+
 module.exports = {
   getReservas,
   analisarPeriodo,
   calcularValor,
   salvarReserva,
+  confirmarPagamento,
 };

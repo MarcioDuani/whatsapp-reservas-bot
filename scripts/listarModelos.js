@@ -2,7 +2,7 @@
 // Utilitário: lista os modelos Gemini disponíveis para sua API key
 // Uso: npm run listar-modelos
 
-require("dotenv").config({ path: "../.env" });
+require("dotenv").config();
 const fetch = require("node-fetch");
 
 const key = process.env.GEMINI_API_KEY;

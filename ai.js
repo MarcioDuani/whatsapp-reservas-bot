@@ -9,8 +9,9 @@ const tools = require("./tools");
 const systemPrompt = require("./contextoCasa");
 const config = require("./config");
 const logger = require("./logger");
+const storage = require("./storage");
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 
 // ================================================
@@ -26,42 +27,51 @@ async function geminiComRetry(fn, chatId = "?", tentativas = 3) {
         err?.status === 429;
 
       if (isRateLimit && i < tentativas) {
-        // Extrai o retryDelay da mensagem de erro do Google (ex: "retryDelay":"7s")
         const match = err.message?.match(/retryDelay[":\s]+["']?(\d+)s/);
-        const espera = match ? parseInt(match[1]) * 1000 : 12000; // default 12s
+        const espera = match ? parseInt(match[1]) * 1000 : 12000;
 
         logger.warn(chatId, `Rate limit — aguardando ${espera / 1000}s antes de tentar novamente (tentativa ${i}/${tentativas})`);
         await new Promise(r => setTimeout(r, espera));
       } else {
-        throw err; // outros erros ou última tentativa: propaga normalmente
+        throw err;
       }
     }
   }
 }
 
-// ================================================
-// HISTÓRICO POR CHAT (multi-turn em memória)
-// Estrutura: { chatId: [{role, parts:[{text}]}] }
-// ================================================
-const historicos = {};
-
 function getHistorico(chatId) {
-  if (!historicos[chatId]) historicos[chatId] = [];
-  return historicos[chatId];
+  return storage.getHistorico(chatId);
 }
 
 function adicionarMensagem(chatId, role, text) {
-  const hist = getHistorico(chatId);
-  hist.push({ role, parts: [{ text }] });
-
-  // Limitar tamanho do histórico para não explodir a janela de contexto
-  if (hist.length > config.MAX_HISTORICO_TURNOS * 2) {
-    hist.splice(0, 2); // remove o par mais antigo (user + model)
-  }
+  storage.adicionarMensagem(chatId, role, text);
 }
 
 function limparHistorico(chatId) {
-  historicos[chatId] = [];
+  storage.limparHistorico(chatId);
+}
+
+
+function sanitizarHistorico(hist) {
+  if (!Array.isArray(hist) || hist.length === 0) return [];
+
+  const limpo = [];
+  for (const msg of hist) {
+    if (!msg || !msg.role || !msg.parts) continue;
+
+    // O primeiro item do histórico DEVE ter o role 'user'
+    if (limpo.length === 0 && msg.role !== "user") continue;
+
+    // Evita dois turnos consecutivos do mesmo role
+    if (limpo.length > 0 && limpo[limpo.length - 1].role === msg.role) {
+      limpo[limpo.length - 1] = msg;
+      continue;
+    }
+
+    limpo.push(msg);
+  }
+
+  return limpo;
 }
 
 
@@ -75,16 +85,18 @@ async function processarMensagem(texto, contexto = {}) {
     // 1. Adiciona a mensagem do usuário ao histórico
     adicionarMensagem(chatId, "user", texto);
 
-    // 2. Configura o modelo com system prompt e function declarations
+    // 2. Configura o modelo com system prompt, dados do usuário e function declarations
+    const instrucaoDinamica = `${systemPrompt}\n\n[DADOS DO CLIENTE ATUAL]\nNome no WhatsApp: ${contexto.nome || "Desconhecido"}\nTelefone/ID: ${contexto.telefone || contexto.chatId}`;
+    
     const model = genAI.getGenerativeModel({
       model: config.GEMINI_MODEL,
-      systemInstruction: systemPrompt,
+      systemInstruction: instrucaoDinamica,
       tools: [{ functionDeclarations: tools.functionDeclarations }],
     });
 
-    // 3. Inicia o chat com o histórico COMPLETO (exceto a última mensagem, que acabou de entrar)
+    // 3. Inicia o chat com o histórico sanitizado (exceto a última mensagem, que acabou de entrar)
     const historico = getHistorico(chatId);
-    const historicoParcial = historico.slice(0, -1); // tudo menos a última (a atual)
+    const historicoParcial = sanitizarHistorico(historico.slice(0, -1));
 
     const chat = model.startChat({
       history: historicoParcial,
@@ -125,8 +137,9 @@ async function processarMensagem(texto, contexto = {}) {
         });
       }
 
-      // Retorna os resultados para o Gemini continuar o raciocínio
-      result = await geminiComRetry(() => chat.sendMessage(functionResults), chatId);
+      // Retorna os resultados para o Gemini continuar o raciocínio (como texto para evitar erro de role 'function')
+      const funcsTexto = functionResults.map(fr => `[Resultado da ferramenta ${fr.functionResponse.name}]: ${JSON.stringify(fr.functionResponse.response)}`).join("\n");
+      result = await geminiComRetry(() => chat.sendMessage(funcsTexto), chatId);
       response = result.response;
     }
 
@@ -135,6 +148,7 @@ async function processarMensagem(texto, contexto = {}) {
 
     if (!textoResposta) {
       logger.warn(chatId, "Gemini retornou resposta vazia.");
+      storage.removerUltimaMensagem(chatId);
       return "Desculpe, não consegui processar agora 😢 Tente novamente em instantes.";
     }
 
@@ -146,6 +160,7 @@ async function processarMensagem(texto, contexto = {}) {
 
   } catch (err) {
     logger.error(chatId, "Erro em processarMensagem:", err.message);
+    storage.removerUltimaMensagem(chatId);
     return "Tive um problema técnico aqui 😢 Pode tentar novamente?";
   }
 }
