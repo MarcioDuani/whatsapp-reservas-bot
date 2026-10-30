@@ -8,10 +8,12 @@ const ai = require("./ai");
 const config = require("./config");
 const logger = require("./logger");
 const sheets = require("./sheets");
+const storage = require("./storage");
 const whatsapp = require("./whatsappCloud");
+const siteAdmin = require("./siteAdmin");
 
 // Prevenção de crashes por exceções não capturadas
-process.on("unhandledRejection", (reason, promise) => {
+process.on("unhandledRejection", (reason) => {
   logger.error(null, "Unhandled Rejection:", reason?.message || reason);
 });
 process.on("uncaughtException", (err) => {
@@ -19,23 +21,49 @@ process.on("uncaughtException", (err) => {
 });
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
+
+// Ativa a Home Page (/), o Painel de Edição (/admin) e as APIs de upload/salvamento
+siteAdmin.configurarRotasSiteEAdmin(app);
 
 // ================================================
-// RATE LIMITING — evita flood / duplos envios
+// 1. ANTI-DUPLICIDADE DE WEBHOOK (IDEMPOTÊNCIA)
+// Guarda os últimos 500 IDs de mensagens processadas para nunca responder 2x
 // ================================================
-const ultimoAtendimento = {}; // { chatId: timestamp }
+const mensagensProcessadas = new Set();
 
-function podeProcesar(chatId) {
-  const agora = Date.now();
-  const ultimo = ultimoAtendimento[chatId] || 0;
-  if (agora - ultimo < config.RATE_LIMIT_MS) return false;
-  ultimoAtendimento[chatId] = agora;
-  return true;
+function jaFoiProcessada(messageId) {
+  if (!messageId) return false;
+  if (mensagensProcessadas.has(messageId)) return true;
+
+  mensagensProcessadas.add(messageId);
+  if (mensagensProcessadas.size > 500) {
+    const primeiro = mensagensProcessadas.values().next().value;
+    mensagensProcessadas.delete(primeiro);
+  }
+  return false;
 }
 
 // ================================================
-// TIMEOUTS ATIVOS (Aviso + Encerramento)
+// 2. AGRUPADOR DE MENSAGENS PICADAS (DEBOUNCE) + FILA POR CLIENTE (MUTEX)
+// Evita chamadas simultâneas para o mesmo cliente e junta linhas seguidas
+// ================================================
+const buffersTexto = {};     // { chatId: { textos: [], timer: Timeout, contexto: {} } }
+const filaPorCliente = {};   // { chatId: Promise }
+
+function enfileirarTarefaCliente(chatId, tarefaFn) {
+  const anterior = filaPorCliente[chatId] || Promise.resolve();
+  const novaPromise = anterior
+    .then(() => tarefaFn())
+    .catch((err) => {
+      logger.error(chatId, "Erro na fila de processamento do cliente:", err.message);
+    });
+  filaPorCliente[chatId] = novaPromise;
+  return novaPromise;
+}
+
+// ================================================
+// 3. TIMEOUTS ATIVOS (Aviso + Encerramento)
 // ================================================
 const timeoutsAviso = {};
 const timeoutsEncerramento = {};
@@ -64,12 +92,12 @@ function iniciarTimeout(chatId) {
       );
 
       timeoutsEncerramento[chatId] = setTimeout(async () => {
-        logger.info(chatId, "Timeout ativo estourado. Encerrando atendimento após aviso.");
+        logger.info(chatId, "Timeout ativo estourado. Encerrando atendimento após aviso (mantendo cotação por 24h).");
         ai.limparHistorico(chatId);
         try {
           await whatsapp.enviarTexto(
             chatId,
-            "⏱️ Como não tivemos resposta, estou encerrando este atendimento por agora.\nSe precisar de algo no futuro, é só me chamar novamente! Tenha um ótimo dia."
+            "⏱️ Como não tivemos resposta, estou encerrando este atendimento por agora.\nSe quiser retomar a reserva depois, é só me chamar aqui! Tenha um ótimo dia."
           );
         } catch (_) {}
       }, tempoEncerramentoMs);
@@ -82,12 +110,159 @@ function iniciarTimeout(chatId) {
 // Mapeia { messageIdOuTelefone: telCliente }
 const comprovantesPendentes = {};
 
+
 // ================================================
-// PROCESSAMENTO DE MENSAGEM RECEBIDA
+// PROCESSAMENTO DE COMPROVANTE (IMAGEM OU PDF)
+// ================================================
+async function processarMidiaComprovante(mediaId, tipoMidia, contexto) {
+  const { chatId, nome, telefone } = contexto;
+  logger.info(chatId, `Mídia recebida (${tipoMidia}, ID: ${mediaId}) — baixando e analisando com Gemini Vision.`);
+
+  try {
+    const media = await whatsapp.baixarMidia(mediaId);
+
+    // Busca reserva pendente na planilha (ou usa a última cotação de 24h como referência)
+    let reservaPendente = null;
+    try {
+      reservaPendente = await sheets.buscarReservaPendente(telefone, chatId);
+    } catch (e) {
+      logger.warn(chatId, "Não foi possível consultar reserva pendente na planilha:", e.message);
+    }
+
+    if (!reservaPendente) {
+      const ultimaCotacao = storage.getUltimaCotacao(chatId);
+      if (ultimaCotacao) {
+        reservaPendente = {
+          checkin: ultimaCotacao.checkin,
+          checkout: ultimaCotacao.checkout,
+          nome: nome,
+          telefone: telefone,
+          valorTotal: ultimaCotacao.valorTotal,
+          valorSinalEsperado: ultimaCotacao.sinal
+        };
+      }
+    }
+
+    // Valida com o Gemini Vision (lê destinatário, valor, pagador e checa se não é agendamento)
+    const analise = await ai.analisarComprovante(media.base64, media.mimeType, chatId, reservaPendente);
+
+    if (analise.valido) {
+      logger.info(chatId, "Comprovante PIX validado com sucesso — encaminhando para os proprietários.");
+
+      const legendaDono =
+        `✅ *[APROVAÇÃO PIX — JOANA]*\n` +
+        `📱 *WhatsApp:* ${telefone}\n` +
+        (analise.resumoParaDono ? `${analise.resumoParaDono}\n\n` : `👤 *Cliente:* ${nome}\n\n`) +
+        `👉 Para confirmar o pagamento na planilha, responda esta mensagem com *OK*.`;
+
+      for (const dono of config.NUMEROS_DONOS) {
+        try {
+          let envioDono;
+          if (tipoMidia === "document") {
+            envioDono = await whatsapp.enviarDocumento(dono, {
+              mediaId: media.id,
+              caption: legendaDono,
+              filename: "comprovante-pix.pdf"
+            });
+          } else {
+            envioDono = await whatsapp.enviarImagem(dono, {
+              mediaId: media.id,
+              caption: legendaDono
+            });
+          }
+
+          const idEnviado = envioDono?.messages?.[0]?.id;
+          if (idEnviado) {
+            comprovantesPendentes[idEnviado] = telefone;
+          }
+        } catch (e) {
+          logger.warn(chatId, `Erro ao encaminhar comprovante para dono ${dono}: ${e.message}`);
+        }
+      }
+
+      comprovantesPendentes["ultimo"] = telefone;
+      ai.limparHistorico(chatId);
+
+      await whatsapp.enviarTexto(
+        chatId,
+        "Comprovante recebido e conferido com sucesso! ✅ Já encaminhei para o proprietário fazer a confirmação final. Assim que ele der o OK, você receberá a confirmação definitiva da sua reserva por aqui. Muito obrigado! 🏖️"
+      );
+
+    } else {
+      logger.info(chatId, "Comprovante recusado pela validação inteligente.");
+      await whatsapp.enviarTexto(
+        chatId,
+        analise.motivoRecusa ||
+          "Esse arquivo não parece ser um comprovante de transferência bancária ou PIX válido 🙂\nPor favor, envie o comprovante correto para garantirmos a sua reserva."
+      );
+    }
+
+  } catch (err) {
+    logger.error(chatId, "Erro no fluxo de comprovante:", err.message);
+    await whatsapp.enviarTexto(
+      chatId,
+      "Recebi seu arquivo! Já estamos verificando os dados para confirmar sua reserva. Muito obrigado! 🙂"
+    );
+  }
+}
+
+
+// ================================================
+// PROCESSAMENTO DE TEXTO AGRUPADO DO CLIENTE
+// ================================================
+async function processarTextoClienteAgrupado(textoCompleto, contexto) {
+  const { chatId } = contexto;
+
+  // 1. Limite de tamanho de mensagem (proteção contra textos gigantes)
+  const maxChars = config.MAX_CARACTERES_MENSAGEM || 1000;
+  let textoFinal = textoCompleto.trim();
+  if (textoFinal.length > maxChars) {
+    logger.warn(chatId, `Mensagem muito longa (${textoFinal.length} chars). Truncando para ${maxChars} chars.`);
+    textoFinal = textoFinal.substring(0, maxChars);
+  }
+
+  // 2. Limite de mensagens por sessão (proteção anti-curioso / anti-abuso de cota)
+  const maxMsgsSessao = config.MAX_MENSAGENS_SESSAO || 15;
+  const contadorAtual = storage.getContadorSessao(chatId);
+  if (contadorAtual >= maxMsgsSessao) {
+    logger.warn(chatId, `Cliente atingiu o limite de ${maxMsgsSessao} mensagens na sessão sem concluir reserva.`);
+    await whatsapp.enviarTexto(
+      chatId,
+      "Já te passei as informações principais por aqui! 😊 Para dúvidas mais específicas ou condições especiais, já avisei o proprietário e ele continuará o seu atendimento em instantes."
+    );
+    return;
+  }
+
+  // 3. Processa com a IA (Gemini)
+  const resposta = await ai.processarMensagem(textoFinal, contexto);
+  await whatsapp.enviarTexto(chatId, resposta);
+
+  // Reinicia o monitor de inatividade
+  iniciarTimeout(chatId);
+}
+
+
+// ================================================
+// PROCESSAMENTO DE MENSAGEM RECEBIDA DO WEBHOOK
 // ================================================
 async function processarMensagemRecebida(msg, contatoNome) {
   const chatId = whatsapp.normalizarNumero(msg.from);
   if (!chatId) return;
+
+  // 1. Anti-duplicidade: ignora se o mesmo msg.id já foi processado
+  if (msg.id && jaFoiProcessada(msg.id)) {
+    logger.info(chatId, `Mensagem duplicada ignorada (ID: ${msg.id})`);
+    return;
+  }
+
+  // 2. Ignora mensagens muito antigas (> 5 minutos atrás) que tenham ficado retidas
+  if (msg.timestamp) {
+    const idadeSegundos = Math.floor(Date.now() / 1000) - Number(msg.timestamp);
+    if (idadeSegundos > 300) {
+      logger.warn(chatId, `Mensagem antiga ignorada (${idadeSegundos}s atrás).`);
+      return;
+    }
+  }
 
   const nome = contatoNome || "Cliente";
   const telefone = chatId;
@@ -98,17 +273,11 @@ async function processarMensagemRecebida(msg, contatoNome) {
     whatsapp.marcarComoLida(msg.id).catch(() => {});
   }
 
-  // Rate-limiting
-  if (!podeProcesar(chatId)) {
-    logger.warn(chatId, "Rate limit — mensagem ignorada.");
-    return;
-  }
-
-  // Interrompe contagem de inatividade pois o cliente respondeu
+  // Interrompe contagem de inatividade pois o cliente interagiu
   limparTimeout(chatId);
 
   // ================================================
-  // 1. MENSAGEM DE TEXTO
+  // A) MENSAGEM DE TEXTO
   // ================================================
   if (msg.type === "text") {
     const texto = msg.text?.body || "";
@@ -116,19 +285,16 @@ async function processarMensagemRecebida(msg, contatoNome) {
 
     logger.info(chatId, `MSG RECEBIDA: "${texto.substring(0, 100)}"`);
 
-    // --- FLUXO DE APROVAÇÃO MANUAL DOS DONOS ---
+    // --- FLUXO IMEDIATO DE APROVAÇÃO MANUAL DOS DONOS ("OK") ---
     if (config.NUMEROS_DONOS.includes(chatId)) {
       const textoUpper = texto.toUpperCase().trim();
 
       if (textoUpper === "OK" || textoUpper.startsWith("OK ")) {
-        // Tenta achar o telefone do cliente:
-        // Opção 1: na mensagem citada (context)
         let telCliente = null;
         if (msg.context?.id && comprovantesPendentes[msg.context.id]) {
           telCliente = comprovantesPendentes[msg.context.id];
         }
 
-        // Opção 2: se digitou "OK 5521999999999"
         if (!telCliente) {
           const matchInline = texto.match(/OK\s+(\d+)/i);
           if (matchInline && matchInline[1]) {
@@ -136,7 +302,6 @@ async function processarMensagemRecebida(msg, contatoNome) {
           }
         }
 
-        // Opção 3: pega o último cliente pendente registrado
         if (!telCliente && comprovantesPendentes["ultimo"]) {
           telCliente = comprovantesPendentes["ultimo"];
         }
@@ -144,13 +309,15 @@ async function processarMensagemRecebida(msg, contatoNome) {
         if (telCliente) {
           const atualizou = await sheets.confirmarPagamento(telCliente, chatId);
           if (atualizou) {
+            storage.limparCotacao(telCliente);
             await whatsapp.enviarTexto(chatId, "Pagamento confirmado na planilha ✅");
 
-            // Avisa o cliente
             try {
               const msgCliente =
-                "Seu pagamento foi confirmado! 🎉 Sua reserva está garantida.\n\n" +
-                "Em breve entraremos em contato por aqui para combinar a entrega das chaves e acertar os detalhes da sua estadia. Muito obrigado! 🏖️";
+                "Seu pagamento foi confirmado! 🎉 Sua reserva está 100% garantida.\n\n" +
+                "Já deixei abaixo o nosso *Manual de Uso da Casa* com todas as informações importantes para a sua estadia (incluindo acesso, água, chaves e a senha do Wi-Fi):\n\n" +
+                `${config.CASA.manualUsoTexto}\n\n` +
+                "Em breve entraremos em contato para combinar a entrega das chaves. Qualquer dúvida, estamos à disposição. Boa estadia! 🏖️";
               await whatsapp.enviarTexto(telCliente, msgCliente);
             } catch (e) {
               logger.warn(chatId, "Erro ao notificar o cliente: " + e.message);
@@ -161,93 +328,94 @@ async function processarMensagemRecebida(msg, contatoNome) {
         } else {
           await whatsapp.enviarTexto(
             chatId,
-            "Não consegui identificar o telefone do cliente. Você pode responder com 'OK <telefone>' (ex: OK 5521999999999)."
+            "Não consegui identificar o telefone do cliente. Você pode responder diretamente na foto do comprovante ou digitar 'OK <telefone>' (ex: OK 5521999999999)."
           );
         }
         return;
       }
     }
 
-    // --- RESPOSTA AO CLIENTE VIA IA ---
-    const resposta = await ai.processarMensagem(texto, contexto);
-    await whatsapp.enviarTexto(chatId, resposta);
+    // --- AGRUPAMENTO (DEBOUNCE DE 3s) PARA CONVERSA NATURAL ---
+    // Se o cliente mandar várias linhas seguidas ("Oi" / "Boa tarde" / "Tem vaga dia 10?"),
+    // aguarda 3 segundos e junta tudo em 1 única chamada à IA!
+    if (!buffersTexto[chatId]) {
+      buffersTexto[chatId] = {
+        textos: [],
+        timer: null,
+        contexto
+      };
+    }
 
-    // Reinicia o monitor de inatividade
-    iniciarTimeout(chatId);
+    buffersTexto[chatId].textos.push(texto.trim());
+    buffersTexto[chatId].contexto = contexto;
+
+    if (buffersTexto[chatId].timer) {
+      clearTimeout(buffersTexto[chatId].timer);
+    }
+
+    const tempoDebounce = config.DEBOUNCE_MS || 3000;
+    buffersTexto[chatId].timer = setTimeout(() => {
+      const pacote = buffersTexto[chatId];
+      delete buffersTexto[chatId];
+
+      if (!pacote || pacote.textos.length === 0) return;
+
+      const textoAgrupado = pacote.textos.join("\n");
+      if (pacote.textos.length > 1) {
+        logger.info(chatId, `📦 ${pacote.textos.length} mensagens agrupadas em 1 envio: "${textoAgrupado.substring(0, 100)}"`);
+      }
+
+      enfileirarTarefaCliente(chatId, () => processarTextoClienteAgrupado(textoAgrupado, pacote.contexto));
+    }, tempoDebounce);
+
     return;
   }
 
   // ================================================
-  // 2. MENSAGEM DE IMAGEM (COMPROVANTE PIX)
+  // B) MENSAGEM DE IMAGEM (COMPROVANTE PIX EM FOTO)
   // ================================================
   if (msg.type === "image") {
     const mediaId = msg.image?.id;
     if (!mediaId) return;
 
-    logger.info(chatId, `Imagem recebida (ID: ${mediaId}) — baixando e analisando com Gemini Vision.`);
+    enfileirarTarefaCliente(chatId, () => processarMidiaComprovante(mediaId, "image", contexto));
+    return;
+  }
 
-    try {
-      // Baixa o binário e obtém o base64
-      const media = await whatsapp.baixarMidia(mediaId);
+  // ================================================
+  // C) MENSAGEM DE DOCUMENTO (COMPROVANTE PIX EM PDF)
+  // ================================================
+  if (msg.type === "document") {
+    const mediaId = msg.document?.id;
+    const mimeType = msg.document?.mime_type || "";
+    if (!mediaId) return;
 
-      // Valida com o Gemini Vision se é de fato um comprovante PIX
-      const ehComprovante = await ai.analisarComprovante(media.base64, media.mimeType, chatId);
-
-      if (ehComprovante) {
-        logger.info(chatId, "Comprovante PIX validado com sucesso — encaminhando para os proprietários.");
-
-        const legendaDono = `[APROVAÇÃO PIX] Cliente: ${nome} (${telefone}).\nPara confirmar o pagamento na planilha, responda esta mensagem com a palavra OK.`;
-
-        // Encaminha a foto do comprovante para todos os donos configurados
-        for (const dono of config.NUMEROS_DONOS) {
-          try {
-            const envioDono = await whatsapp.enviarImagem(dono, {
-              mediaId: media.id,
-              caption: legendaDono
-            });
-
-            // Guarda o ID da mensagem enviada para associar caso o dono responda "OK" diretamente a ela
-            const idEnviado = envioDono?.messages?.[0]?.id;
-            if (idEnviado) {
-              comprovantesPendentes[idEnviado] = telefone;
-            }
-          } catch (e) {
-            logger.warn(chatId, `Erro ao encaminhar comprovante para dono ${dono}: ${e.message}`);
-          }
-        }
-
-        // Armazena como último cliente pendente para facilitar aprovação
-        comprovantesPendentes["ultimo"] = telefone;
-
-        // Limpa o ciclo de conversa atual da IA
-        ai.limparHistorico(chatId);
-
-        await whatsapp.enviarTexto(
-          chatId,
-          "Comprovante recebido e validado com sucesso! ✅ Encaminhei para o proprietário aprovar. Assim que confirmado, você receberá a confirmação definitiva da sua reserva aqui. Muito obrigado! 🏖️"
-        );
-
-      } else {
-        logger.info(chatId, "A imagem enviada não é um comprovante PIX válido.");
-        await whatsapp.enviarTexto(
-          chatId,
-          "Essa imagem não parece ser um comprovante de transferência bancária ou PIX 🙂\nPor favor, envie o comprovante do pagamento para garantirmos a sua reserva."
-        );
-      }
-
-    } catch (err) {
-      logger.error(chatId, "Erro no fluxo de comprovante de imagem:", err.message);
+    if (mimeType.includes("pdf") || mimeType.includes("image")) {
+      enfileirarTarefaCliente(chatId, () => processarMidiaComprovante(mediaId, "document", contexto));
+    } else {
       await whatsapp.enviarTexto(
         chatId,
-        "Recebi seu comprovante! Já estamos verificando os dados para confirmar sua reserva. Muito obrigado! 🙂"
+        "Para comprovante de pagamento, por favor envie como *foto (imagem)* ou arquivo *PDF* 🙂"
       );
     }
     return;
   }
 
-  // Outros tipos de mensagem (áudio, figurinhas, contatos, localização)
-  if (msg.type === "sticker" || msg.type === "audio") {
-    // Ignora silenciosamente para não gastar chamadas
+  // ================================================
+  // D) MENSAGEM DE ÁUDIO (Responde educadamente em vez de deixar no vácuo)
+  // ================================================
+  if (msg.type === "audio") {
+    logger.info(chatId, "Áudio recebido — solicitando mensagem em texto.");
+    await whatsapp.enviarTexto(
+      chatId,
+      "Oi! 😊 Por aqui eu consigo ler apenas mensagens de texto (e fotos/PDF de comprovantes). Você poderia me escrever por texto como posso te ajudar?"
+    );
+    iniciarTimeout(chatId);
+    return;
+  }
+
+  // Figurinhas (stickers) continuam ignoradas silenciosamente
+  if (msg.type === "sticker") {
     return;
   }
 }
@@ -283,8 +451,6 @@ app.post("/webhook", async (req, res) => {
 
   try {
     const body = req.body;
-    console.log("📥 [WEBHOOK RECEBIDO]:", JSON.stringify(body, null, 2));
-
     if (body.object !== "whatsapp_business_account") {
       return;
     }
@@ -310,8 +476,8 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// Rota raiz para conferência e health check do servidor
-app.get("/", (req, res) => {
+// Rota de conferência e health check do servidor
+app.get("/status", (req, res) => {
   res.send({
     status: "online",
     bot: "Joana — Chatbot de Reservas (WhatsApp Cloud API)",
@@ -400,13 +566,18 @@ process.on("SIGTERM", () => { encerrarTunel(); process.exit(0); });
 // INICIALIZAÇÃO DO SERVIDOR HTTP
 // ================================================
 const PORT = config.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", (err) => {
+  if (err) {
+    logger.error(null, `Erro ao iniciar servidor na porta ${PORT}:`, err.message);
+    process.exit(1);
+  }
   logger.info(null, `BOT ONLINE 🚀 Servidor Webhook rodando na porta ${PORT}`);
   console.log("\n========================================");
   console.log("🚀 BOT ONLINE COM WHATSAPP CLOUD API (META)!");
   console.log(`📡 Servidor HTTP / Webhook ouvindo na porta: ${PORT}`);
+  console.log(`🏡 Site da Casa: http://localhost:${PORT}/`);
+  console.log(`⚙️  Painel Admin: http://localhost:${PORT}/admin (Senha: ${config.ADMIN_SENHA})`);
   console.log(`🔗 Endpoint de verificação do Webhook: /webhook`);
-  console.log(`🔑 Verify Token configurado: ${config.WHATSAPP_VERIFY_TOKEN}`);
   console.log("========================================\n");
 
   iniciarTunelAutomatico(PORT);

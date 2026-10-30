@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Painel de Edição — Casa de Praia Figueira</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'sans-serif'] }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="bg-amber-50/50 text-slate-800 font-sans antialiased min-h-screen pb-24">
+
+  <!-- ================= TELA DE LOGIN ================= -->
+  <div id="tela-login" class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl border border-amber-200/80 shadow-lg max-w-md w-full p-6 sm:p-8 space-y-5">
+      <div class="text-center space-y-1.5">
+        <div class="w-14 h-14 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center text-2xl mx-auto shadow-sm">
+          🏡
+        </div>
+        <h1 class="text-xl font-bold text-slate-900">Painel do Site — Casa Figueira</h1>
+        <p class="text-xs sm:text-sm text-slate-500">Digite a senha de administrador para trocar fotos, textos e valores dos cards.</p>
+      </div>
+
+      <!-- Alerta quando aberto via arquivo local (file://) -->
+      <div id="alerta-file-protocol" class="hidden p-3.5 rounded-2xl bg-amber-100/90 border border-amber-300 text-amber-950 text-xs space-y-1.5 shadow-sm">
+        <p class="font-bold flex items-center gap-1.5">
+          <span>⚠️</span>
+          <span>Aberto como arquivo local (file://)</span>
+        </p>
+        <p class="text-[11px] text-amber-900 leading-relaxed">
+          Para autenticar, salvar alterações e enviar fotos, o servidor local precisa estar ativo e você deve acessar pelo link:
+        </p>
+        <a href="http://localhost:3000/admin" class="inline-flex items-center gap-1 font-bold text-sky-800 hover:text-sky-900 underline">
+          <span>👉 Acessar via http://localhost:3000/admin</span>
+        </a>
+      </div>
+
+      <form onsubmit="fazerLogin(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Senha de Acesso</label>
+          <input
+            id="input-senha"
+            type="password"
+            placeholder="Digite sua senha..."
+            required
+            class="w-full px-4 py-3 rounded-xl border border-amber-300 focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm"
+          />
+          <p id="erro-login" class="hidden text-xs text-red-600 font-medium mt-1.5">Senha incorreta. Tente novamente.</p>
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-3 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-sm shadow-sm transition"
+        >
+          🔓 Entrar no Painel
+        </button>
+      </form>
+
+      <div class="text-center pt-2 border-t border-amber-100">
+        <a href="/" class="text-xs font-medium text-sky-700 hover:underline">← Voltar para o site da casa</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= PAINEL PRINCIPAL ================= -->
+  <div id="tela-painel" class="hidden">
+
+    <!-- Topo Fixo Responsivo -->
+    <header class="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-amber-200/80 shadow-sm">
+      <div class="max-w-4xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-2">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="w-8 h-8 sm:w-9 sm:h-9 shrink-0 rounded-xl bg-amber-100 text-amber-900 flex items-center justify-center text-base sm:text-lg font-bold">⚙️</span>
+          <div class="min-w-0">
+            <h1 class="text-sm sm:text-base font-bold text-slate-900 truncate">Editor do Site</h1>
+            <p class="hidden sm:block text-[11px] text-slate-500">Altere textos, preços ou adicione fotos nos cards</p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            onclick="deslogar()"
+            title="Sair do Painel"
+            class="w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-2 rounded-xl bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-700 border border-slate-200 hover:border-red-200 text-xs font-bold transition inline-flex items-center justify-center gap-1.5"
+          >
+            <span class="text-sm leading-none">✕</span>
+            <span class="hidden sm:inline font-semibold">Sair</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Abas do Painel -->
+      <div class="max-w-4xl mx-auto px-3 sm:px-4 pb-2.5 flex gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar">
+        <button onclick="mudarSecaoAdmin('casa', this)" class="aba-admin shrink-0 whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-semibold bg-amber-200/90 text-amber-950 border border-amber-300">
+          🏡 Cards da Casa
+        </button>
+        <button onclick="mudarSecaoAdmin('valores', this)" class="aba-admin shrink-0 whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-medium bg-white text-slate-600 border border-amber-200">
+          💰 Valores & Diárias
+        </button>
+        <button onclick="mudarSecaoAdmin('praias', this)" class="aba-admin shrink-0 whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-medium bg-white text-slate-600 border border-amber-200">
+          🌊 Cards de Praias
+        </button>
+        <button onclick="mudarSecaoAdmin('capa', this)" class="aba-admin shrink-0 whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-medium bg-white text-slate-600 border border-amber-200">
+          🖼️ Capa & Topo
+        </button>
+      </div>
+    </header>
+
+    <!-- Conteúdo do Editor -->
+    <main class="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-5">
+
+      <!-- SEÇÃO 1: CARDS DA CASA -->
+      <section id="sec-admin-casa" class="sec-admin space-y-4">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <h2 class="text-sm sm:text-lg font-bold text-slate-900">🏡 Ambientes da Casa</h2>
+            <p class="text-xs text-slate-500">Toque para editar textos ou adicionar fotos em cada card.</p>
+          </div>
+          <button
+            onclick="adicionarNovoCard('cardsCasa')"
+            title="Adicionar Novo Card"
+            class="shrink-0 w-9 h-9 sm:w-auto sm:h-auto sm:px-3.5 sm:py-2 rounded-xl bg-slate-900/5 hover:bg-slate-900/10 text-slate-800 border border-slate-300/80 backdrop-blur-xs text-sm sm:text-xs font-bold sm:font-semibold shadow-xs transition inline-flex items-center justify-center gap-1.5"
+          >
+            <span class="text-lg sm:text-sm leading-none">＋</span>
+            <span class="hidden sm:inline">Novo Card</span>
+          </button>
+        </div>
+
+        <div id="lista-cards-casa" class="space-y-4"></div>
+      </section>
+
+      <!-- SEÇÃO 2: VALORES & DIÁRIAS -->
+      <section id="sec-admin-valores" class="sec-admin hidden space-y-4">
+        <div>
+          <h2 class="text-sm sm:text-lg font-bold text-slate-900">💰 Valores das Diárias</h2>
+          <p class="text-xs text-slate-500">Atualize os preços exibidos na aba "Valores" e na barra inferior do site.</p>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="bg-white rounded-2xl border border-amber-200 p-4 sm:p-5 shadow-sm space-y-3">
+            <h3 class="font-bold text-slate-900 text-sm">Card 1 — Dias de Semana</h3>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Título do Período</label>
+              <input id="val-semana-titulo" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Valor da Diária (ex: R$ 300)</label>
+              <input id="val-semana-preco" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-900" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Texto de Observação</label>
+              <input id="val-semana-detalhe" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs" />
+            </div>
+          </div>
+
+          <div class="bg-white rounded-2xl border border-amber-200 p-4 sm:p-5 shadow-sm space-y-3">
+            <h3 class="font-bold text-slate-900 text-sm">Card 2 — Fim de Semana</h3>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Título do Período</label>
+              <input id="val-fds-titulo" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Valor da Diária (ex: R$ 450)</label>
+              <input id="val-fds-preco" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-900" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Texto de Observação</label>
+              <input id="val-fds-detalhe" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs" />
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-amber-200 p-4 sm:p-5 shadow-sm space-y-3">
+          <h3 class="font-bold text-slate-900 text-sm">Barra Fixa Inferior</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Texto Acima do Preço</label>
+              <input id="val-barra-topo" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Resumo de Preço (ex: R$ 300 a R$ 450)</label>
+              <input id="val-barra-preco" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SEÇÃO 3: CARDS DE PRAIAS -->
+      <section id="sec-admin-praias" class="sec-admin hidden space-y-4">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <h2 class="text-sm sm:text-lg font-bold text-slate-900">🌊 Figueira & Praias</h2>
+            <p class="text-xs text-slate-500">Edite as fotos e descrições das praias e lagoa.</p>
+          </div>
+          <button
+            onclick="adicionarNovoCard('cardsPraias')"
+            title="Adicionar Novo Card de Praia"
+            class="shrink-0 w-9 h-9 sm:w-auto sm:h-auto sm:px-3.5 sm:py-2 rounded-xl bg-slate-900/5 hover:bg-slate-900/10 text-slate-800 border border-slate-300/80 backdrop-blur-xs text-sm sm:text-xs font-bold sm:font-semibold shadow-xs transition inline-flex items-center justify-center gap-1.5"
+          >
+            <span class="text-lg sm:text-sm leading-none">＋</span>
+            <span class="hidden sm:inline">Novo Card de Praia</span>
+          </button>
+        </div>
+
+        <div id="lista-cards-praias" class="space-y-4"></div>
+      </section>
+
+      <!-- SEÇÃO 4: CAPA & TOPO -->
+      <section id="sec-admin-capa" class="sec-admin hidden space-y-4">
+        <div>
+          <h2 class="text-sm sm:text-lg font-bold text-slate-900">🖼️ Foto de Capa e Topo</h2>
+          <p class="text-xs text-slate-500">Personalize o banner principal e os 4 quadradinhos de resumo.</p>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-amber-200 p-4 sm:p-5 shadow-sm space-y-4">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
+            <img id="preview-capa-img" src="" alt="Capa" class="w-full sm:w-48 h-32 sm:h-28 object-cover rounded-xl border border-amber-200 bg-amber-50" />
+            <div class="space-y-2">
+              <p class="text-xs font-semibold text-slate-700">Foto Principal de Capa</p>
+              <label class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-950 text-xs font-semibold cursor-pointer transition">
+                <span>📸 Trocar Foto de Capa</span>
+                <input type="file" accept="image/*" class="hidden" onchange="trocarFotoCapa(this)" />
+              </label>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 pt-1">
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Selo de Localização na Capa</label>
+              <input id="capa-badge" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Título Principal</label>
+              <input id="capa-titulo" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Subtítulo</label>
+              <input id="capa-subtitulo" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+            </div>
+          </div>
+
+          <div class="pt-3 border-t border-amber-100">
+            <p class="text-xs font-semibold text-slate-700 mb-2.5">4 Quadradinhos de Resumo Abaixo da Capa:</p>
+            <div id="lista-pilulas-capa" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Barra Fixa Inferior de Salvamento -->
+    <div class="fixed bottom-0 inset-x-0 z-50 bg-white/95 backdrop-blur-md border-t border-amber-200 px-3 sm:px-4 py-2.5 sm:py-3 shadow-lg">
+      <div class="max-w-4xl mx-auto flex items-center justify-between gap-2">
+        <p id="status-salvamento" class="text-[11px] sm:text-xs font-medium text-slate-600 truncate">
+          Edite os dados e toque em <strong>Salvar</strong>.
+        </p>
+        <button
+          onclick="salvarTudo()"
+          id="btn-salvar-rodape"
+          class="shrink-0 whitespace-nowrap px-4 sm:px-5 py-2 sm:py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition inline-flex items-center gap-1.5"
+        >
+          <span>💾</span>
+          <span>Salvar Alterações</span>
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Toast de Notificação -->
+  <div id="toast-msg" class="fixed top-4 right-4 left-4 sm:left-auto z-50 hidden px-4 py-3 rounded-2xl shadow-xl text-xs sm:text-sm font-semibold text-white bg-emerald-600 text-center transition"></div>
+
+  <!-- Modal Customizado de Confirmação (Excluir Card / Remover Foto) -->
+  <div id="modal-confirmacao" onclick="fecharConfirmacao()" class="fixed inset-0 z-50 hidden bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div onclick="event.stopPropagation()" class="bg-white rounded-3xl border border-amber-200 shadow-2xl max-w-sm w-full p-6 text-center space-y-4">
+      <div class="w-12 h-12 rounded-2xl bg-red-50 border border-red-100 text-red-600 flex items-center justify-center mx-auto">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14zM10 11v6M14 11v6"/>
+        </svg>
+      </div>
+      <div class="space-y-1">
+        <h3 id="modal-conf-titulo" class="text-base font-bold text-slate-900">Confirmar exclusão?</h3>
+        <p id="modal-conf-texto" class="text-xs text-slate-500">Essa ação removerá o item selecionado.</p>
+      </div>
+      <div class="grid grid-cols-2 gap-2.5 pt-2">
+        <button
+          type="button"
+          onclick="fecharConfirmacao()"
+          class="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          id="modal-conf-btn-ok"
+          class="py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-sm transition"
+        >
+          Sim, Excluir
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Customizado para Criar Novo Card -->
+  <div id="modal-novo-card" onclick="fecharModalNovoCard()" class="fixed inset-0 z-50 hidden bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+    <div onclick="event.stopPropagation()" class="bg-white rounded-3xl border border-amber-200 shadow-2xl max-w-md w-full p-5 sm:p-6 space-y-4 my-auto">
+      <div class="flex items-center justify-between border-b border-amber-100 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-8 h-8 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-sm">＋</span>
+          <h3 class="text-sm sm:text-base font-bold text-slate-900">Criar Novo Card</h3>
+        </div>
+        <button type="button" onclick="fecharModalNovoCard()" class="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs flex items-center justify-center">✕</button>
+      </div>
+
+      <div class="space-y-3">
+        <div id="wrap-novo-categoria" class="space-y-2">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Ambiente no Site (Filtro do Topo)</label>
+            <select id="novo-card-categoria" onchange="verificarNovoAmbienteModal(this.value)" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium bg-white">
+              <option value="lazer">Varandas & Churrasco</option>
+              <option value="quartos">Quartos</option>
+              <option value="interno">Sala & Cozinhas</option>
+              <option value="estrutura">Fachada, Quintal & Garagem</option>
+              <option value="__novo__">＋ Criar outro ambiente novo...</option>
+            </select>
+          </div>
+          <div id="wrap-input-novo-ambiente" class="hidden">
+            <label class="block text-xs font-medium text-sky-700 mb-1">Digite o nome do novo ambiente:</label>
+            <input id="input-novo-ambiente-custom" type="text" placeholder="Ex: Banheiros, Área Gourmet, Lavanderia..." class="w-full px-3 py-2 rounded-xl border border-sky-300 bg-sky-50/40 text-xs font-semibold text-slate-900" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Etiqueta Acima do Título (ex: Lazer & Gourmet)</label>
+          <input id="novo-card-etiqueta" type="text" placeholder="Ex: Área Externa" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold" />
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Título Principal do Card *</label>
+          <input id="novo-card-titulo" type="text" placeholder="Ex: Chuveirão & Jardim" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-900" />
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Descrição do Card</label>
+          <textarea id="novo-card-descricao" rows="2" placeholder="Descreva os detalhes deste ambiente..." class="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-700"></textarea>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Foto(s) do Novo Card</label>
+          <input id="novo-card-fotos" type="file" accept="image/*" multiple class="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3.5 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-sky-50 file:text-sky-700 hover:file:bg-sky-100" />
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2.5 pt-2">
+        <button
+          type="button"
+          onclick="fecharModalNovoCard()"
+          class="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          id="btn-confirmar-novo-card"
+          onclick="confirmarCriacaoNovoCard()"
+          class="py-2.5 px-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold shadow-sm transition"
+        >
+          ✅ Criar Card
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lógica do Painel Admin -->
+  <script src="admin.js"></script>
+</body>
+</html>

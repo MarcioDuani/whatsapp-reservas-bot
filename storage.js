@@ -45,7 +45,9 @@ function getSessao(chatId) {
       estado: "livre",
       nome: null,
       telefone: null,
-      ultimaInteracao: Date.now()
+      ultimaInteracao: Date.now(),
+      mensagensNaSessao: 0,
+      ultimaCotacao: null
     };
   }
   return sessions[chatId];
@@ -53,7 +55,7 @@ function getSessao(chatId) {
 
 function getHistorico(chatId) {
   const sessao = getSessao(chatId);
-  
+
   // Verifica expiração por inatividade
   const tempoExpiracaoMs = (config.EXPIRACAO_SESSAO_MINUTOS || 30) * 60 * 1000;
   if (sessao.historico && sessao.historico.length > 0) {
@@ -61,10 +63,11 @@ function getHistorico(chatId) {
       logger.info(chatId, `Sessão expirada por inatividade (> ${config.EXPIRACAO_SESSAO_MINUTOS || 30} min). Histórico limpo.`);
       sessao.historico = [];
       sessao.estado = "livre";
+      sessao.mensagensNaSessao = 0;
       salvar();
     }
   }
-  
+
   return sessao.historico || [];
 }
 
@@ -74,6 +77,10 @@ function adicionarMensagem(chatId, role, text) {
 
   sessao.historico.push({ role, parts: [{ text }] });
   sessao.ultimaInteracao = Date.now();
+
+  if (role === "user") {
+    sessao.mensagensNaSessao = (sessao.mensagensNaSessao || 0) + 1;
+  }
 
   const maxMensagens = (config.MAX_HISTORICO_TURNOS || 4) * 2;
   if (sessao.historico.length > maxMensagens) {
@@ -87,7 +94,55 @@ function limparHistorico(chatId) {
   const sessao = getSessao(chatId);
   sessao.historico = [];
   sessao.estado = "livre";
+  sessao.mensagensNaSessao = 0;
   salvar();
+}
+
+/**
+ * Salva a última cotação de datas/valores feita pelo cliente (válida por 24h)
+ * para que a Joana lembre mesmo se o histórico da conversa expirar após 5-8 min.
+ */
+function salvarCotacao(chatId, { checkin, checkout, valorTotal, sinal, noites }) {
+  const sessao = getSessao(chatId);
+  sessao.ultimaCotacao = {
+    checkin,
+    checkout,
+    valorTotal,
+    sinal,
+    noites,
+    timestamp: Date.now()
+  };
+  salvar();
+}
+
+/**
+ * Retorna a última cotação se ainda estiver dentro do prazo de validade (padrão 24h)
+ */
+function getUltimaCotacao(chatId) {
+  const sessao = getSessao(chatId);
+  if (!sessao.ultimaCotacao || !sessao.ultimaCotacao.timestamp) return null;
+
+  const validadeMs = (config.VALIDADE_COTACAO_HORAS || 24) * 60 * 60 * 1000;
+  if (Date.now() - sessao.ultimaCotacao.timestamp > validadeMs) {
+    sessao.ultimaCotacao = null;
+    salvar();
+    return null;
+  }
+
+  return sessao.ultimaCotacao;
+}
+
+function limparCotacao(chatId) {
+  const sessao = getSessao(chatId);
+  sessao.ultimaCotacao = null;
+  salvar();
+}
+
+function getContadorSessao(chatId) {
+  // Garante verificação de expiração antes de ler o contador
+  getHistorico(chatId);
+  const sessao = getSessao(chatId);
+  return sessao.mensagensNaSessao || 0;
 }
 
 function atualizarEstado(chatId, novosDados) {
@@ -113,5 +168,9 @@ module.exports = {
   adicionarMensagem,
   limparHistorico,
   removerUltimaMensagem,
-  atualizarEstado
+  atualizarEstado,
+  salvarCotacao,
+  getUltimaCotacao,
+  limparCotacao,
+  getContadorSessao
 };

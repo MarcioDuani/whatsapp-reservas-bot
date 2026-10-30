@@ -1,0 +1,63 @@
+/* ============================================================
+   style.css — Estilos personalizados da Home Page e Painel Admin
+   Casa de Praia — Figueira (Arraial do Cabo, RJ)
+   ============================================================ */
+
+/* Ocultar barra de rolagem mantendo o scroll funcional */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Ajuste de fonte e camada do Mapa Interativo (Leaflet) */
+.leaflet-container {
+  font-family: 'Inter', sans-serif;
+  z-index: 10;
+}
+
+/* Mobile (< 640px): Sempre mostra todos os cards da casa na lista vertical */
+@media (max-width: 639px) {
+  #grid-ambientes .card-item.hidden {
+    display: flex !important;
+  }
+}
+
+/* Grid padrão (Celular: 1 coluna empilhada) */
+.carrossel-grid-casa,
+.carrossel-grid-praias {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+/* Tablet (640px+): 2 linhas, rolando lateralmente por colunas sem esticar */
+@media (min-width: 640px) {
+  .carrossel-grid-casa,
+  .carrossel-grid-praias {
+    grid-template-columns: none;
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: calc((100% - 1.25rem) / 2);
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    scroll-snap-type: x mandatory;
+  }
+
+  /* Quando filtrado com até 3 cards: 1 linha centralizada */
+  .carrossel-grid-casa.uma-linha,
+  .carrossel-grid-praias.uma-linha {
+    grid-template-rows: repeat(1, minmax(0, 1fr));
+    justify-content: center;
+  }
+}
+
+/* Desktop (1024px+): Exatamente 3 colunas visíveis (1/3 da largura cada) */
+@media (min-width: 1024px) {
+  .carrossel-grid-casa {
+    grid-auto-columns: calc((100% - 2.5rem) / 3);
+  }
+}
+
