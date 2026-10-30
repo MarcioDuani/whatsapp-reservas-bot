@@ -1,0 +1,55 @@
+====================================================================
+COMO COLOCAR SUAS FOTOS E VÍDEOS REAIS DA CASA NA HOME PAGE
+====================================================================
+
+Você tem 2 jeitos super simples de colocar suas fotos e vídeos da casa:
+
+--------------------------------------------------------------------
+JEITO 1: Colando os arquivos dentro da pasta "homepage/midia/casa"
+--------------------------------------------------------------------
+Basta colar suas fotos e vídeos dentro da pasta:
+  c:\Users\marci\Desktop\chatbot\homepage\midia\casa\
+
+Se você der estes nomes aos arquivos, o site já carrega cada um no
+cartão correspondente automaticamente:
+
+  • fachada.jpg        -> Foto da frente da casa / vista do mar na rua
+  • quarto-suite.jpg   -> Foto do Quarto 1 (Suíte)
+  • quarto-2.jpg       -> Foto do Quarto 2 (Família / Beliche / Camas)
+  • churrasqueira.jpg  -> Foto da Churrasqueira e área gourmet
+  • varanda.jpg        -> Foto das Varandas (frontal 35m² / fundos 25m²)
+  • cozinha.jpg        -> Foto da Cozinha interna / externa
+  • sala.jpg           -> Foto da Sala de estar / Smart TV
+  • banheiros.jpg      -> Foto dos Banheiros / Chuveirão
+  • garagem.jpg        -> Foto da Garagem para 3 carros / Jardim
+  • video-casa.mp4     -> Vídeo 1: Tour pelos cômodos da casa
+  • video-rua-mar.mp4  -> Vídeo 2: Saindo na rua e vendo o mar
+
+(Dica: Se você colar fotos com outros nomes na pasta, basta me avisar
+que eu aponto os nomes certinhos no código em 5 segundos!)
+
+--------------------------------------------------------------------
+JEITO 2: Testando direto na tela do navegador (com 1 clique!)
+--------------------------------------------------------------------
+Abra o arquivo "homepage/index.html" no seu navegador (Chrome/Edge).
+Em cima de cada foto da casa tem um botãozinho:
+  [📷 Trocar foto] ou [🎬 Carregar vídeo]
+Ao clicar nele, você escolhe qualquer foto ou vídeo do seu computador
+ou celular e vê na hora como fica no cartão!
+
+--------------------------------------------------------------------
+FOTOS DE FIGUEIRA E ARRAIAL DO CABO JÁ INCLUÍDAS:
+--------------------------------------------------------------------
+Na pasta "homepage/midia/arraial/" já baixei 10 fotos reais em alta
+resolução das praias e lagoas de Figueira e Arraial do Cabo:
+  • hero-arraial.jpg
+  • lagoa-figueira.jpg
+  • arubinha-lagoa.jpg
+  • praia-grande.jpg
+  • praia-forno.jpg
+  • praia-farol.jpg
+  • prainha-atalaia.jpg
+  • passeio-barco.jpg
+  • gruta-azul.jpg
+  • por-do-sol.jpg
+

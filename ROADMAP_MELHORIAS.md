@@ -74,3 +74,4 @@ Pedir ao Gemini Vision para ler os dados escritos no comprovante (em **Foto** ou
 > **Resumo de Capacidade:**
 > - **Para testes e baixo volume (Gratuito):** Usando `gemini-2.5-flash-lite` (ou rodízio automático entre os modelos gratuitos da chave), suporta até ~10 clientes simultâneos sem custo.
 > - **Para alta temporada / casa famosa (Pay-as-you-go ativado no Google AI Studio):** O limite sobe para **1.000+ requisições por minuto**, atendendo 30+ clientes simultaneamente em 2 segundos, custando apenas centavos por dia.
+

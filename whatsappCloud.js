@@ -45,7 +45,8 @@ async function enviarTexto(destinatario, texto) {
         "Authorization": `Bearer ${config.WHATSAPP_TOKEN}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      timeout: 20000
     });
 
     const data = await res.json();
@@ -79,7 +80,8 @@ async function marcarComoLida(messageId) {
         messaging_product: "whatsapp",
         status: "read",
         message_id: messageId
-      })
+      }),
+      timeout: 10000
     });
   } catch (_) {
     // Falha em marcar como lida não deve quebrar o fluxo
@@ -96,7 +98,8 @@ async function obterInfoMidia(mediaId) {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${config.WHATSAPP_TOKEN}`
-    }
+    },
+    timeout: 15000
   });
 
   const data = await res.json();
@@ -109,7 +112,7 @@ async function obterInfoMidia(mediaId) {
 
 /**
  * Faz o download do binário de uma mídia a partir da URL fornecida pela Meta
- * Retorna { buffer, base64, mimeType }
+ * Retorna { buffer, base64, mimeType, id }
  */
 async function baixarMidia(mediaId) {
   const info = await obterInfoMidia(mediaId);
@@ -119,7 +122,8 @@ async function baixarMidia(mediaId) {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${config.WHATSAPP_TOKEN}`
-    }
+    },
+    timeout: 25000
   });
 
   if (!res.ok) {
@@ -152,7 +156,8 @@ async function uploadMidia(buffer, mimeType, filename = "imagem.jpg") {
       "Authorization": `Bearer ${config.WHATSAPP_TOKEN}`,
       ...form.getHeaders()
     },
-    body: form
+    body: form,
+    timeout: 25000
   });
 
   const data = await res.json();
@@ -165,7 +170,6 @@ async function uploadMidia(buffer, mimeType, filename = "imagem.jpg") {
 
 /**
  * Envia uma imagem para um destinatário
- * Pode ser por mediaId já existente, por buffer (faz upload prévio) ou por link direto
  */
 async function enviarImagem(destinatario, { mediaId, buffer, mimeType, caption, filename }) {
   const to = normalizarNumero(destinatario);
@@ -197,13 +201,54 @@ async function enviarImagem(destinatario, { mediaId, buffer, mimeType, caption, 
       "Authorization": `Bearer ${config.WHATSAPP_TOKEN}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    timeout: 20000
   });
 
   const data = await res.json();
   if (!res.ok) {
     logger.error(to, "Erro ao enviar imagem via Cloud API:", JSON.stringify(data));
     throw new Error(data?.error?.message || "Erro ao enviar imagem");
+  }
+
+  return data;
+}
+
+/**
+ * Envia um documento (ex: comprovante PIX em PDF) para um destinatário
+ */
+async function enviarDocumento(destinatario, { mediaId, caption, filename = "comprovante.pdf" }) {
+  const to = normalizarNumero(destinatario);
+  if (!to || !mediaId) return;
+
+  const url = `${GRAPH_API_BASE}/${config.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: to,
+    type: "document",
+    document: {
+      id: mediaId,
+      caption: caption || "",
+      filename
+    }
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${config.WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload),
+    timeout: 20000
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    logger.error(to, "Erro ao enviar documento via Cloud API:", JSON.stringify(data));
+    throw new Error(data?.error?.message || "Erro ao enviar documento");
   }
 
   return data;
@@ -220,7 +265,6 @@ async function atualizarWebhookMeta(webhookUrl) {
 
   const url = `${GRAPH_API_BASE}/${config.WHATSAPP_WABA_ID}/subscribed_apps`;
 
-  // Tenta até 3 vezes (pois o túnel recém-criado do Cloudflare pode levar alguns segundos para propagar no DNS)
   for (let tentativa = 1; tentativa <= 3; tentativa++) {
     try {
       const res = await fetch(url, {
@@ -232,7 +276,8 @@ async function atualizarWebhookMeta(webhookUrl) {
         body: JSON.stringify({
           override_callback_uri: webhookUrl,
           verify_token: config.WHATSAPP_VERIFY_TOKEN
-        })
+        }),
+        timeout: 15000
       });
 
       const data = await res.json();
@@ -262,5 +307,6 @@ module.exports = {
   baixarMidia,
   uploadMidia,
   enviarImagem,
+  enviarDocumento,
   atualizarWebhookMeta
 };

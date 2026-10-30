@@ -55,6 +55,33 @@ function parseData(dataStr) {
 }
 
 
+/**
+ * Verifica se um registro com status "pendente" já passou do tempo limite (ex: 60 min)
+ * Nota: Só expira automaticamente se a coluna H tiver hora registrada (formato ISO/timestamp)
+ */
+function pendenteExpirado(dataCadastroStr) {
+  if (!dataCadastroStr) return false;
+  const str = String(dataCadastroStr).trim();
+  // Se tiver apenas YYYY-MM-DD antigo (sem hora), não expira automaticamente para manter compatibilidade
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
+
+  const dt = new Date(str);
+  if (isNaN(dt.getTime())) return false;
+
+  const limiteMs = (config.EXPIRACAO_RESERVA_PENDENTE_MINUTOS || 60) * 60 * 1000;
+  return (Date.now() - dt.getTime()) > limiteMs;
+}
+
+
+function telefonesIguais(telA, telB) {
+  if (!telA || !telB) return false;
+  const a = String(telA).replace(/\D/g, "");
+  const b = String(telB).replace(/\D/g, "");
+  if (!a || !b) return false;
+  return a.includes(b) || b.includes(a);
+}
+
+
 // ================================================
 // LER RESERVAS
 // ================================================
@@ -74,7 +101,7 @@ async function getReservas(chatId = null) {
 // ================================================
 // ANALISAR SOBREPOSIÇÃO DE PERÍODO
 // ================================================
-function analisarPeriodo(checkinBR, checkoutBR, registros) {
+function analisarPeriodo(checkinBR, checkoutBR, registros, telefoneSolicitante = null) {
   const entrada = parseData(checkinBR);
   const saida = parseData(checkoutBR);
 
@@ -104,8 +131,10 @@ function analisarPeriodo(checkinBR, checkoutBR, registros) {
 
     if (!rIn || !rOut) continue;
 
+    const telRegistro = r[3] || "";
     const status = (r[4] || "").toLowerCase();
     const regra = (r[5] || "").toLowerCase();
+    const dataCadastro = r[7] || "";
 
     const temSobreposicao = entrada < rOut && saida > rIn;
     if (!temSobreposicao) continue;
@@ -132,13 +161,24 @@ function analisarPeriodo(checkinBR, checkoutBR, registros) {
       continue;
     }
 
-    // Reserva confirmada — trava
-    if (status === "confirmado" || status === "pendente") {
+    // Reserva confirmada — sempre trava
+    if (status === "confirmado") {
       return { status: "ocupado", motivo: "reserva existente" };
+    }
+
+    // Reserva pendente — trava se não estiver expirada e não for do próprio cliente atualizando
+    if (status === "pendente") {
+      if (pendenteExpirado(dataCadastro)) {
+        continue; // Pendente vencido (> 60 min sem PIX) não trava mais a agenda
+      }
+      if (telefoneSolicitante && telefonesIguais(telRegistro, telefoneSolicitante)) {
+        continue; // É a própria pré-reserva pendente do cliente atual
+      }
+      return { status: "ocupado", motivo: "reserva pendente em andamento" };
     }
   }
 
-  return { status: "livre" };
+  return { status: "livre", noites };
 }
 
 
@@ -180,40 +220,106 @@ function calcularValor(checkinBR, checkoutBR) {
 
 
 // ================================================
-// SALVAR RESERVA
+// SALVAR RESERVA (Com proteção anti-trava: máx 1 pendente por telefone)
 // ================================================
 async function salvarReserva(checkinBR, checkoutBR, nome, telefone, valor, chatId = null) {
   return comRetry(async () => {
     const client = await auth.getClient();
     const sheetsAPI = google.sheets({ version: "v4", auth: client });
-    const hoje = new Date().toISOString().split("T")[0];
+    const agoraISO = new Date().toISOString();
 
     // Converter DD/MM/YYYY → YYYY-MM-DD para o Sheets
     function brParaISO(br) {
       const [d, m, y] = br.split("/");
-      return `${y}-${m}-${d}`;
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     }
 
     const checkinISO = /\d{4}-\d{2}-\d{2}/.test(checkinBR) ? checkinBR : brParaISO(checkinBR);
     const checkoutISO = /\d{4}-\d{2}-\d{2}/.test(checkoutBR) ? checkoutBR : brParaISO(checkoutBR);
+
+    // Verifica se este cliente já possui uma reserva "pendente" na planilha.
+    // Se tiver, atualiza a linha existente em vez de criar múltiplas reservas pendentes (anti-flood de agenda)
+    const res = await sheetsAPI.spreadsheets.values.get({
+      spreadsheetId: config.SPREADSHEET_ID,
+      range: config.RESERVAS_RANGE
+    });
+    const rows = res.data.values || [];
+    let linhaPendenteExistente = -1;
+
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      const rowStatus = (row[4] || "").toLowerCase();
+      if (rowStatus === "pendente" && telefonesIguais(row[3], telefone)) {
+        linhaPendenteExistente = i + 2;
+        break;
+      }
+    }
+
+    const novaLinha = [
+      checkinISO,
+      checkoutISO,
+      nome,
+      telefone,
+      "pendente",     // status
+      "",             // regra
+      valor,
+      agoraISO
+    ];
+
+    if (linhaPendenteExistente !== -1) {
+      logger.info(chatId, `Atualizando reserva pendente existente do cliente na linha ${linhaPendenteExistente}.`);
+      await sheetsAPI.spreadsheets.values.update({
+        spreadsheetId: config.SPREADSHEET_ID,
+        range: `reservas!A${linhaPendenteExistente}:H${linhaPendenteExistente}`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [novaLinha]
+        }
+      });
+      return;
+    }
 
     await sheetsAPI.spreadsheets.values.append({
       spreadsheetId: config.SPREADSHEET_ID,
       range: config.RESERVAS_APPEND_RANGE,
       valueInputOption: "USER_ENTERED",
       requestBody: {
-        values: [[
-          checkinISO,
-          checkoutISO,
-          nome,
-          telefone,
-          "pendente",     // status
-          "",             // regra
-          valor,
-          hoje
-        ]]
+        values: [novaLinha]
       }
     });
+  }, 3, chatId);
+}
+
+
+// ================================================
+// BUSCAR RESERVA PENDENTE DO CLIENTE (Para validação de PIX)
+// ================================================
+async function buscarReservaPendente(telefone_cliente, chatId = null) {
+  return comRetry(async () => {
+    const rows = await getReservas(chatId);
+
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      const rowStatus = (row[4] || "").toLowerCase();
+
+      if (rowStatus === "pendente" && telefonesIguais(row[3], telefone_cliente)) {
+        const valorTotal = Number(String(row[6] || "0").replace(/[^\d.,]/g, "").replace(",", ".")) || 0;
+        const valorSinalEsperado = Math.ceil(valorTotal * 0.3);
+
+        return {
+          linha: i + 2,
+          checkin: row[0] || "",
+          checkout: row[1] || "",
+          nome: row[2] || "Cliente",
+          telefone: row[3] || telefone_cliente,
+          status: rowStatus,
+          valorTotal,
+          valorSinalEsperado
+        };
+      }
+    }
+
+    return null;
   }, 3, chatId);
 }
 
@@ -225,39 +331,35 @@ async function confirmarPagamento(telefone_cliente, chatId = null) {
   return comRetry(async () => {
     const client = await auth.getClient();
     const sheetsAPI = google.sheets({ version: "v4", auth: client });
-    
+
     // Baixa a planilha para achar a linha
     const res = await sheetsAPI.spreadsheets.values.get({
       spreadsheetId: config.SPREADSHEET_ID,
       range: config.RESERVAS_RANGE // "reservas!A2:H500"
     });
-    
+
     const rows = res.data.values || [];
     let rowIndexToUpdate = -1;
-    
+
     // Busca de baixo para cima para pegar a reserva mais recente
     for (let i = rows.length - 1; i >= 0; i--) {
       const row = rows[i];
       const rowTelefone = row[3] || "";
       const rowStatus = (row[4] || "").toLowerCase();
-      
-      // Remove caracteres não numéricos para comparar
-      const tel1 = rowTelefone.replace(/\D/g, "");
-      const tel2 = telefone_cliente.replace(/\D/g, "");
-      
-      if (tel1.includes(tel2) || tel2.includes(tel1)) {
+
+      if (telefonesIguais(rowTelefone, telefone_cliente)) {
         if (rowStatus === "pendente") {
           rowIndexToUpdate = i + 2; // +2 porque o array começa no 0 e a planilha começa no A2
           break;
         }
       }
     }
-    
+
     if (rowIndexToUpdate === -1) {
       logger.warn(chatId, `Nenhuma reserva pendente encontrada para o telefone ${telefone_cliente}`);
       return false;
     }
-    
+
     // Atualiza a coluna E (Status) para 'confirmado'
     await sheetsAPI.spreadsheets.values.update({
       spreadsheetId: config.SPREADSHEET_ID,
@@ -267,7 +369,7 @@ async function confirmarPagamento(telefone_cliente, chatId = null) {
         values: [["confirmado"]]
       }
     });
-    
+
     logger.info(chatId, `Reserva da linha ${rowIndexToUpdate} atualizada para confirmado.`);
     return true;
   }, 3, chatId);
@@ -278,5 +380,6 @@ module.exports = {
   analisarPeriodo,
   calcularValor,
   salvarReserva,
+  buscarReservaPendente,
   confirmarPagamento,
 };
